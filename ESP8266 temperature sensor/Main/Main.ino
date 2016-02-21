@@ -1,8 +1,6 @@
 /*
-  DS1631_MQTT_Temperature_Sensor_0.1
-  20 Feb 16
-
-  First full attempt at using the Arduino IDE to create a MQTT DS1631 Temperature Sensor.
+  DS1631_MQTT_Temperature_Sensor_0.2
+  21 Feb 2016
 */
 
 #include <ESP8266WiFi.h>
@@ -10,15 +8,7 @@
 #include <Ticker.h>
 #include <Wire.h>
 #include <DS1631.h>
-
-// Update these with values suitable for your network.
-const char* ssid = "SSID";
-const char* password = "SSID_PASS";
-const char* mqtt_server = "MQTT_SERVER";
-const char* mqtt_username = "MQTT_USERNAME";
-const char* mqtt_password = "MQTT_PASSWORD";
-const char* mqtt_topic = "/esp8266/mainRoom/temperature/1";
-const char* esp8266_client = "ESP8266_MR_1";
+#include "Config.h"         // Contains all the SSID and MQTT config data (such as usernames, passwords, and topics).
 
 // Temperature Sensor
 DS1631 Temp1(0);
@@ -30,7 +20,7 @@ int ticker_delay = 60;
 // Wifi
 WiFiClient espClient;
 PubSubClient client(espClient);
-char msg[50];
+char msg[5];
 
 void setup_wifi() {
   delay(10);
@@ -52,14 +42,8 @@ void setup_wifi() {
   Serial.println(WiFi.localIP());
 }
 
+// Used for when the ESP board receives a message it has subscribed to. Blank for now as not subscribed to anything.
 void callback(char* topic, byte* payload, unsigned int length) {
-  Serial.print("Message arrived [");
-  Serial.print(topic);
-  Serial.print("] ");
-  for (int i = 0; i < length; i++) {
-    Serial.print((char)payload[i]);
-  }
-  Serial.println();
 }
 
 void reconnect() {
@@ -128,7 +112,6 @@ void setup() {
 }
 
 void loop() {
-
   if (!client.connected()) {
     reconnect();
   }

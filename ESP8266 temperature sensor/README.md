@@ -7,4 +7,6 @@ I'm still developing this, so the code might be a bit buggy at the moment.
 
 
 ## 21 Feb 2016
-Created seperate config file to hold passwords, etc. for wifi and MQTT broker. This version is now usable as a simple MQTT temperature sensor by modifying the config file as necessary.
+Created seperate config file to hold passwords, etc. for wifi and MQTT broker.
+
+This version is now usable as a simple MQTT temperature sensor by modifying the config file as necessary.

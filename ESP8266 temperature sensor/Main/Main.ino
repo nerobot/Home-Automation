@@ -1,6 +1,6 @@
 /*
   DS1631_MQTT_Temperature_Sensor_with_OLED
-  28 Feb 2016
+  27 Feb 2016
 */
 
 #include <ESP8266WiFi.h>

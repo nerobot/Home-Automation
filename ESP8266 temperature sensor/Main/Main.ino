@@ -1,6 +1,6 @@
 /*
-  ESP8266 MQTT Temperature Sensor with OLED and rotary encoder.
-  18 March 2016
+  Rotary switch_0.7
+  17 March 2016
 */
 
 #include <ESP8266WiFi.h>
@@ -19,13 +19,14 @@
 unsigned long previousMillis = 0;
 unsigned long previousMillis2 = 0;
 const long interval = 1000*60;           // interval at which to blink (milliseconds)
+int encoderChange = 0;
 
 // Rotary encoder
 //const int bounceValue = 50; // ms
 int previous = 0;
 const int PinCLK = 5;     // Used for generating interrupts using CLK signal
 const int PinDT = 4;     // Used for reading DT signal
-//const int PinSW = 8;     // Used for the push button switch. Not currently used.
+const int PinSW = 13;     // Used for the push button switch.
 
 double desiredTemp = 20.0;
 double stepValue = 0.5;
@@ -103,8 +104,10 @@ void setup_oled(){
   Serial.println("Setting up the OLED.");
   display.begin(SSD1306_SWITCHCAPVCC);  // Switch OLED
   display.clearDisplay();
-  display.setTextColor(WHITE);  
+  display.setTextColor(WHITE); 
+  display.print("Starting");
   display.display();
+  display.clearDisplay();
 }
 
 void printDouble( double val, byte precision){
@@ -137,7 +140,10 @@ void printDouble( double val, byte precision){
 // FSM
 // Transition callback function
 #define TEMPERATURE_TIME_TRIGGER 1
-#define DESIRED_TEMP_UPDATE 2
+#define DESIRED_TEMP_UPDATE_RE 2
+#define NEW_MQTT_DESIRED_TEMP 3
+#define TRIGGER_60_SECONDS 4
+#define ENCODER_MOVE 5
 
 void on_waiting_enter(){
   Serial.println("Entering waiting.");
@@ -147,12 +153,49 @@ void on_waiting_exit(){
   Serial.println("Leaving waiting");
 }
 
+void on_sleeping_enter(){
+  Serial.println("Entering sleeping.");
+}
+
+void on_sleeping_exit(){
+  Serial.println("Leaving sleeping");
+}
+
 State state_waiting(on_waiting_enter, &on_waiting_exit);
+State state_sleeping(on_sleeping_enter, &on_sleeping_exit);
 Fsm fsm(&state_waiting);
+
+void transition_new_desired_temp_mqtt(){
+  Serial.println("Received new desired temperature");
+  Serial.println(desiredTemp);
+
+  display.setCursor(0, 0);
+  display.setTextSize(3);
+  printDouble(T_dec, 1);
+  display.setCursor(50, 40);
+  display.setTextSize(2);
+  printDouble(desiredTemp, 1);
+  display.display();
+  //ssddelay(2000);
+  display.clearDisplay();
+}
+
+void transition_new_desired_temp_mqtt_sleeping(){
+  Serial.println("Received new desired temperature");
+  Serial.println(desiredTemp);
+}
 
 void transition_new_desired_temp() {
   Serial.println("Setting new desired temperature");
 
+  if (encoderChange == 1){
+    if ((desiredTemp += stepValue) > maxTemperature)
+      desiredTemp = maxTemperature;
+  }
+  else if (encoderChange == 2){
+    if ((desiredTemp -= stepValue) < minTemperature)
+      desiredTemp = minTemperature;
+  }
   Serial.println(desiredTemp);
   
   display.setCursor(0, 0);
@@ -171,7 +214,7 @@ void transition_new_desired_temp() {
   client.publish(mqtt_desired_temp_send, msg);
 }
 
-void transition_getting_temperature() {
+void obtainTemperature(){
   Serial.println("Obtaining temperature...");
 
   uint16_t temp = Temp1.readTempOneShotInt();
@@ -179,6 +222,30 @@ void transition_getting_temperature() {
 
   uint8_t Th = temp >> 8;
   uint8_t Tl = temp & 0xFF;
+
+  if (Th >= 0x80)     //if sign bit is set, then temp is negative
+    Th = Th - 256;
+  temp = (uint16_t)((Th << 8) + Tl);
+  temp >>= 4;
+  T_dec = temp * 0.0625;
+
+  // Display T° on "Serial Monitor"
+  Serial.print("Temperature : ");
+  Serial.println(T_dec);
+
+  // Sending the unconverted temperature via MQTT
+  snprintf (msg, 75, "%d", temp);
+  client.publish(mqtt_topic, msg);
+}
+
+void obtainDisplayTemperature(){
+  Serial.println("Obtaining temperature...");
+
+  uint16_t temp = Temp1.readTempOneShotInt();
+  while (!Temp1.conversionDone()) {}
+
+  uint8_t Th = highByte(temp);
+  uint8_t Tl = lowByte(temp);
 
   if (Th >= 0x80)     //if sign bit is set, then temp is negative
     Th = Th - 256;
@@ -206,11 +273,49 @@ void transition_getting_temperature() {
   display.clearDisplay();
 }
 
+void transition_obtain_temp_display() {
+  Serial.println("Obtaining and displaying temperature");
+  obtainDisplayTemperature();
+}
+
+void transition_button_pressed(){
+  Serial.println("Button has just been released");
+}
+
+void transition_waiting_to_sleeping(){
+  Serial.println("Going to sleep");
+  display.print("");
+  display.display();
+  display.clearDisplay();
+}
+
+void transition_encoder_move_from_sleeping(){
+  Serial.println("Going from sleep to wait");
+  /*display.print("Waiting...");
+  display.display();
+  display.clearDisplay();*/
+  obtainDisplayTemperature();
+}
+
+void transition_obtain_temp(){
+  Serial.println("Obtaining temperature without displaying it");
+  obtainTemperature();
+}
+
 void setup_fsm(){
   Serial.println("Setting up FSM.");
-  fsm.add_transition(&state_waiting, &state_waiting, TEMPERATURE_TIME_TRIGGER, &transition_getting_temperature);
+  /*fsm.add_transition(&state_waiting, &state_waiting, TEMPERATURE_TIME_TRIGGER, &transition_getting_temperature);
   fsm.add_transition(&state_waiting, &state_waiting, DESIRED_TEMP_UPDATE, &transition_new_desired_temp);
+  fsm.add_transition(&state_waiting, &state_waiting, BUTTON_RELEASED, &transition_button_pressed);*/
+  fsm.add_transition(&state_waiting, &state_sleeping, TRIGGER_60_SECONDS, &transition_waiting_to_sleeping);
+  fsm.add_transition(&state_sleeping, &state_waiting, ENCODER_MOVE, &transition_encoder_move_from_sleeping);
+  fsm.add_transition(&state_waiting, &state_waiting, TEMPERATURE_TIME_TRIGGER, &transition_obtain_temp_display);
+  fsm.add_transition(&state_sleeping, &state_sleeping, TEMPERATURE_TIME_TRIGGER, &transition_obtain_temp);
+  fsm.add_transition(&state_waiting, &state_waiting, ENCODER_MOVE, &transition_new_desired_temp);
+  fsm.add_transition(&state_waiting, &state_waiting, NEW_MQTT_DESIRED_TEMP, &transition_new_desired_temp_mqtt);
+  fsm.add_transition(&state_sleeping, &state_sleeping, NEW_MQTT_DESIRED_TEMP, &transition_new_desired_temp_mqtt_sleeping);
 }
+
 
 void setup() {
   Serial.begin(115200);
@@ -219,7 +324,7 @@ void setup() {
   
   pinMode(PinCLK,INPUT);
   pinMode(PinDT, INPUT);
-  //pinMode(PinSW, INPUT);    
+  pinMode(PinSW, INPUT);    
 
   setup_oled();
   setup_fsm();
@@ -229,10 +334,13 @@ void setup() {
   fsm.trigger(TEMPERATURE_TIME_TRIGGER);
 }
 
+bool receivedDesiredTemp = false;
+
 char message_buff[100];
 // Used for when the ESP board receives a message it has subscribed to. Blank for now as not subscribed to anything.
 void callback(char* topic, byte* payload, unsigned int length) {
   Serial.println("Received something");
+  
   for (int i =0 ; i < length; i++){
   Serial.print(payload[i]);}
   Serial.println();
@@ -248,22 +356,18 @@ void callback(char* topic, byte* payload, unsigned int length) {
 
   if (strcmp(topic, mqtt_desired_temp_receive) == 0){
     desiredTemp = msgString.toInt() / 2;
-    fsm.trigger(DESIRED_TEMP_UPDATE);
+    receivedDesiredTemp = true;
+//    fsm.trigger(DESIRED_TEMP_UPDATE);
   }
+  else{
+    receivedDesiredTemp = false;
+  }
+  
 }
 
 
-#define NUMBUTTONS 2
-volatile uint8_t pressed[NUMBUTTONS], justPressed[NUMBUTTONS], justReleased[NUMBUTTONS], timePressed[NUMBUTTONS];
-
-//#define NUMBUTTONS 6
-#define CHARGE PD3
-#define OFF PD2
-#define UP PD1
-#define DOWN PD0
-#define CLK PD5
-#define SELECT PD6
-#define ROTARY 0
+#define NUMBUTTONS 3
+uint8_t pressed[NUMBUTTONS], justPressed[NUMBUTTONS], justReleased[NUMBUTTONS], timePressed[NUMBUTTONS];
 
 int bounceValue = 5;
 
@@ -273,9 +377,7 @@ void checkForButtonPress(){
   static uint8_t currentState[NUMBUTTONS];
   static uint16_t lastTime;
   uint8_t index;
-  //uint8_t input = PIND;
-  uint8_t input[2]= {digitalRead(PinCLK), digitalRead(PinDT)};
-  //uint8_t inputCheck[] = {OFF, CHARGE, UP, DOWN, CLK, SELECT};
+  uint8_t input[NUMBUTTONS]= {digitalRead(PinCLK), digitalRead(PinDT), digitalRead(PinSW)};
   uint8_t inputCheck[] = {0, 1};
   
   if (lastTime++ < bounceValue){ // 15ms * 4 debouncing time
@@ -307,10 +409,15 @@ void checkForButtonPress(){
   } 
 }
 
-void checkForRotaryChange(){
+int checkForRotaryChange(){
   static int order[] = {0,0,0,0};
   static int order2[] = {0,0,0,0};
-  
+
+ /* if (justReleased[2]){
+    justReleased[2] = 0;
+//    fsm.trigger(BUTTON_RELEASED);
+    return;
+  }*/
   if (justPressed[0] || justPressed[1]){
     for (int i = 0; i < 3; i++)
       order[i] = order[i+1];
@@ -333,40 +440,72 @@ void checkForRotaryChange(){
 
     if (order[0] == 0 && order[1] == 1 && order[2] == 1 && order[3] == 0){
       if (order2[0] == 1 && order2[1] == 1 && order2[2] == 0 && order2[3] == 0){
-        if ((desiredTemp += stepValue) > maxTemperature)
+       /*if ((desiredTemp += stepValue) > maxTemperature)
           desiredTemp = maxTemperature;
         Serial.println(desiredTemp);
-        fsm.trigger(DESIRED_TEMP_UPDATE);
+//        fsm.trigger(DESIRED_TEMP_UPDATE);
+      }*/
+      return 1;   // Clockwise
       }
     }
     else if (order[0] == 1 && order[1] == 1 && order[2] == 0 && order[3] == 0){
       if (order2[0] ==  0 && order2[1] == 1 && order2[2] == 1 && order2[3] == 0){
-        if ((desiredTemp -= stepValue) < minTemperature)
+        /*if ((desiredTemp -= stepValue) < minTemperature)
           desiredTemp = minTemperature;
         Serial.println(desiredTemp);
-        fsm.trigger(DESIRED_TEMP_UPDATE);
+       // fsm.trigger(DESIRED_TEMP_UPDATE);
+      }*/
+      return 2; //Anti-clockwise
       }
-    }
-  }   
+    }    
+  }  
+  return 0; 
 }
 
+unsigned long waitingTime = 0;
+unsigned long tempWaitingTime = 0;
+unsigned long debounceTime = 0;
+
+
+
 void loop() {
-  Serial.println("Getting started");
+  //Serial.println("Getting started");
   unsigned long currentMillis = millis();
 
-  // Checking if time to get new temperature
-  if (currentMillis - previousMillis2 > interval){
-    fsm.trigger(TEMPERATURE_TIME_TRIGGER);
-    previousMillis2 = currentMillis;
-  }
-  // Checking if time to get new rotary encoder value
-  else if (currentMillis - previousMillis >= 1) {
-    // save the last time you blinked the LED
-    previousMillis = currentMillis;
-    
+  // Checking for triggers
+  waitingTime += (currentMillis - previousMillis);
+  debounceTime += (currentMillis - previousMillis);
+  tempWaitingTime += (currentMillis - previousMillis);
+  
+  encoderChange = 0;
+
+  if (debounceTime >= 1){
+    // Checking for RE changes.
+    debounceTime = 0;
     checkForButtonPress();
-    checkForRotaryChange();
+    encoderChange = checkForRotaryChange();
   }
+
+  if (waitingTime >= 60000){ // 10 seconds (to go to sleep)
+    fsm.trigger(TRIGGER_60_SECONDS);
+    waitingTime = 0;
+  }
+  if (encoderChange){
+    fsm.trigger(ENCODER_MOVE);
+    waitingTime = 0;
+  }
+  if (tempWaitingTime >= 60000){
+    // Obtain the current temperature
+    fsm.trigger(TEMPERATURE_TIME_TRIGGER);
+    tempWaitingTime = 0;
+  }
+  if (receivedDesiredTemp){
+    // New desired temp via MQTT
+    fsm.trigger(NEW_MQTT_DESIRED_TEMP);
+    receivedDesiredTemp = false;
+  }
+  
+  previousMillis = currentMillis;
 
   // Keeping the client connected.
   if (!client.connected()) {

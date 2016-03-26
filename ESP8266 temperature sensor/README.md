@@ -5,6 +5,11 @@ This folder contains all the code and schematics for the ESP8266 MQTT Temperatur
 The board uses the DS1631 I2C temperature sensor IC, but it would be easily modified for whateverboard temperature sensor you want.
 I'm still developing this, so the code might be a bit buggy at the moment.
 
+## 26 March 2016
+Updated the FSM to include a "sleeping" state
+* The system should go to "sleep" after 60 seconds, meaning that the display does blank.
+* During "sleeping" turning the rotary encoder will cause the system to wake up and go back to "waiting".
+
 ## 19 March 2016
 Added a rotary encoder to the system.
 * This allow the desired temperature to be set via the wall mounted system.

@@ -1,15 +1,19 @@
 /*
-  Rotary switch_0.7
-  17 March 2016
+  Boiler Switch 0.3
+
+  20 August 2016
+
+  Started using JSON object string to pass data between esp8266 devices and node-red
 */
 
 #include <ESP8266WiFi.h>
 #include <PubSubClient.h>
+#include <ArduinoJson.h>
 
 #include "Config.h"         // Contains all the SSID and MQTT config data (such as usernames, passwords, and topics).
 
 int boilerState = 0;
-#define boilerSwitchPin D1
+#define boilerSwitchPin D1  // Pin used to control the relay on the WiMos Mini board
 
 // Wifi
 WiFiClient espClient;
@@ -44,7 +48,7 @@ void reconnect() {
   while (!client.connected()) {
     Serial.print("Attempting MQTT connection...");
     // Attempt to connect
-    if (client.connect(esp8266_client)) { //, mqtt_username, mqtt_password)) {
+    if (client.connect(esp8266_client, mqtt_username, mqtt_password)) { //, mqtt_username, mqtt_password)) {
       Serial.println(" MQTT connected");
       // Subscribing
       client.subscribe(mqtt_receive_topic);
@@ -66,9 +70,7 @@ void setup() {
   setup_wifi();
 }
 
-
 char message_buff[100];
-// Used for when the ESP board receives a message it has subscribed to. Blank for now as not subscribed to anything.
 void callback(char* topic, byte* payload, unsigned int length) {
   Serial.println("Received something");
   
@@ -77,24 +79,31 @@ void callback(char* topic, byte* payload, unsigned int length) {
     message_buff[i] = payload[i];
   }
   message_buff[length + 1] = '\0';
-  String msgString = String(message_buff);
-  Serial.println("Payload: " + msgString);
 
+  StaticJsonBuffer<200> jsonBuffer;
+  StaticJsonBuffer<200> jsonBufferSend;
+  JsonObject& root = jsonBuffer.parseObject(message_buff);
+  JsonObject& rootSend = jsonBufferSend.createObject();
+  boilerState = root["value"];
+  const char* type = root["type"];
+  String typeString = String(type);
 
-  if (strcmp(topic, mqtt_receive_topic) == 0) {
-    //desiredTemp = msgString.toInt() / 2;
-    if (msgString.toInt() == 1){
-      boilerState = 1;
-      Serial.println("Boiler on");
+  if (typeString == "boilerState"){
+    rootSend["type"] = "boilerState";
+    Serial.print("Boiler state: ");
+    if (boilerState == 1){
+      Serial.println("ON");
       digitalWrite(boilerSwitchPin, HIGH);
+      rootSend["value"] = 1;
     }
     else{
-      boilerState = 0;
-      Serial.println("Boiler off");
+      Serial.println("OFF");
       digitalWrite(boilerSwitchPin, LOW);
+      rootSend["value"] = 0;
     }
-  }
-  else {
+    char sendBuffer[200];
+    rootSend.printTo(sendBuffer, sizeof(sendBuffer));
+    client.publish(mqtt_send_topic, sendBuffer);
   }
 }
 
